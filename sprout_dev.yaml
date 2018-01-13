@@ -1,0 +1,7 @@
+terraform_sets:
+  - name: development
+    var-file: development.tfvars
+    state-file: tfstate-files/development.tfstate
+  - name: dev-ranjan
+    var-file: dev-ranjan.tfvars
+    state-file: tfstate-files/dev-ranjan.tfstate
