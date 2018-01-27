@@ -19,6 +19,9 @@
 ** This should create "destroy" and "apply" system calls
 
 ### Roadmap
-* Implement method to launch single deployment using default settings
+* Create virtualenv: Done
+* Implement method to launch single deployment using default settings: Done
+* Implement GimsDeployment child class of TerraformDeployment
+** Add functions to manage GIMS instances (i.e stop/delete/create instance)
 * Implement method to launch multiple deployments using default settings
 * Evaluate whether it is worthwhile to add variale functionality

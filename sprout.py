@@ -2,32 +2,29 @@
 
 import sys
 import yaml
+import pyhcl
 import argparse
 
 from subprocess import call
 
+import googleapiclient.discovery
+from oauth2client.client import GoogleCredentials
+
 class TerraformDeployment:
 
-    def __init__(self, name, var_file, state_file, variables=None):
+    def __init__(self, name, state_file, var_files):
         """ Manage Terraform deployment process.
 
-
+            name(str): Arbitrary name of this deployment process
+            state_file(str): Path to tfstate file
+            var_files(list): List of tfvars files
         """
 
         self.name = name
-        self.var_file = var_file
         self.state_file = state_file
-        self.variables = variables
+        self.var_files = var_files
 
-    def add_variables(self, variable_dict):
-        """ Add/overwrite Terraform variables.
-
-        Hold off on developing this.
-        """
-        for key, value in variable_dict.iteritems():
-            self.variables.append("-var '{}={}'".format(key, value))
-
-    def launch(self, tf_command, dry_run):
+    def _launch(self, tf_command, dry_run):
         """ Launch Terraform deployment process.
         """
         arguments = ['terraform', tf_command]
@@ -53,6 +50,114 @@ class TerraformDeployment:
         """
         self.launch(tf_command='apply', dry_run=dry_run)
 
+    def run(self, dry_run):
+        """ Run full deployment pipeline.
+
+        Run destroy and apply.
+        """
+        self.destroy()
+        self.apply()
+
+class GimsDeployment(TerraformDeployment):
+
+    def __init__(self, compute, name, state_file, var_files):
+        super().__init__(name, state_file, var_files)
+        
+        self.compute = compute
+        self.vars = {}
+
+        # Read data from tfvars files into dictionary
+        for var_file in self.var_files:
+            with open(var_file, 'r') as fh:
+                new_vars = hcl.load(fh)
+                self.vars.update(new_vars)
+
+        #! This is not a scalable approach
+        #self.project = self.vars['project']
+        #self.zone = self.vars['zone']
+        #self.load_balancer_vm = self.vars['load_balancer_vm']
+        #self.template_vm = self.vars['template_vm']
+        #self.image_name = self.vars['image_name']
+
+    def stop_instance(self, project, instance_name):
+        """ Stop a running GCP instance.
+        """
+
+        request = compute.instances().stop(
+                                           project = project,
+                                           zone = zone,
+                                           instance = instance_name)
+        response = request.execute()
+
+    def create_image(self, project, image_name, source_disk):
+        """ Create a GCP instance image.
+
+        Images API methods:
+            https://cloud.google.com/compute/docs/reference/latest/images
+        Python Compute API example:
+            https://github.com/GoogleCloudPlatform/python-docs-samples/blob/master/compute/api/create_instance.py
+
+        Status: Untested
+        """
+
+        config = {
+                  'name': image_name,
+                  'rawDisk.source': source_disk
+                 }
+
+        request = compute.images().insert(
+                                          project = project, 
+                                          forceCreate = False,
+                                          body = config)
+        response = request.execute()
+
+        # Check that instance has stopped running
+
+    def deprecate_image(self, project, image_name):
+        """ Deprecate an image.
+
+        I don't really understand what this means, but 
+        I feel like it could be a better alternative to 
+        deleting and then creating new images every time.
+        """
+
+    def delete_image(self, project, image_name):
+        """ Delete a GCP instance image.
+        """
+
+        request = compute.images().delete(
+                                          project = project, 
+                                          image = image_name)
+        response = request.execute()
+
+    # [START delete_instance]
+    def delete_instance(compute, project, zone, name):
+        return compute.instances().delete(
+                                          project = project,
+                                          zone = zone,
+                                          instance = name).execute()
+    # [END delete_instance]
+
+    def delete_instance(self, project, instance_name):
+        """ Delete a GCP compute instance.
+        """
+
+    def run(self, dry_run):
+        """ Run full deployment pipeline.
+        """
+
+        self.destroy()
+        self.apply()
+        self.stop_instance()
+        self.delete_image()
+        self.create_image()
+        self.delete_instance()
+
+def get_deployment_object():
+
+    def __init__():
+
+
 def parse_args(args):
 
     parser = argparse.ArgumentParser()
@@ -75,6 +180,9 @@ def main():
     if sys.version_info[0] < 3:
         raise "Must be using Python 3"
 
+    # Create Google compute API service object
+    compute = googleapiclient.discovery.build('compute', 'v1')
+
     deployments = {}
 
     # Parse command-line arguments
@@ -84,21 +192,26 @@ def main():
 
     with open(config_file) as config_fh:
         config = yaml.load(config_fh)
+    deployment_sets = config['terraform_sets']
 
+    # TODO: Update to handle different classes (i.e. GIMS)
     # Create deployment objects from config file
-    terraform_sets = config['terraform_sets']
-    for tf_set in terraform_sets:
-        deployment = TerraformDeployment(
-                                         name = tf_set['name'],
-                                         var_file = tf_set['var-file'],
-                                         state_file = tf_set['state-file'])
+    
+    for config in deployment_sets:
+        deployment = get_deployment_object(config)
+
+        #deployment = TerraformDeployment(
+        #                                 name = config['name'],
+        #                                 var_file = config['var-file'],
+        #                                 state_file = config['state-file'])
         deployments[deployment.name] = deployment
 
     # Make system calls to run Terraform
     for deployment in deployments.values():
-        deployment.plan(dry_run)
-        deployment.destroy(dry_run)
-        deployment.apply(dry_run)
+        #deployment.plan(dry_run)
+        #deployment.destroy(dry_run)
+        #deployment.apply(dry_run)
+        deployment.run(dry_run)
 
 if __name__ == "__main__":
     main()
