@@ -2,7 +2,7 @@
 
 import sys
 import yaml
-import pyhcl
+import hcl
 import argparse
 
 from subprocess import call
@@ -28,7 +28,8 @@ class TerraformDeployment:
         """ Launch Terraform deployment process.
         """
         arguments = ['terraform', tf_command]
-        arguments.append("-var-file={}".format(self.var_file))
+        for var_file in self.var_files:
+            arguments.append("-var-file={}".format(var_file))
         arguments.append("-state={}".format(self.state_file))
         if dry_run:
             print(arguments)
@@ -38,17 +39,17 @@ class TerraformDeployment:
     def destroy(self, dry_run):
         """ Call Terraform with 'destroy' command.
         """
-        self.launch(tf_command='destroy', dry_run=dry_run)
+        self._launch(tf_command='destroy', dry_run=dry_run)
 
     def plan(self, dry_run):
         """ Call Terraform with 'plan' command.
         """
-        self.launch(tf_command='plan', dry_run=dry_run)
+        self._launch(tf_command='plan', dry_run=dry_run)
 
     def apply(self, dry_run):
         """ Call Terraform with 'apply' command.
         """
-        self.launch(tf_command='apply', dry_run=dry_run)
+        self._launch(tf_command='apply', dry_run=dry_run)
 
     def run(self, dry_run):
         """ Run full deployment pipeline.
@@ -79,7 +80,21 @@ class GimsDeployment(TerraformDeployment):
         #self.template_vm = self.vars['template_vm']
         #self.image_name = self.vars['image_name']
 
-    def stop_instance(self, project, instance_name):
+    def run(self, dry_run):
+        """ Run full deployment pipeline.
+        """
+
+        self.destroy()
+        self.apply()
+        self.stop_instance()
+        self.delete_image()
+        self.create_image()
+        self.delete_instance()
+
+class ComputeOperations():
+
+    @staticmethod
+    def stop_instance(project, zone, instance_name):
         """ Stop a running GCP instance.
         """
 
@@ -89,7 +104,18 @@ class GimsDeployment(TerraformDeployment):
                                            instance = instance_name)
         response = request.execute()
 
-    def create_image(self, project, image_name, source_disk):
+    @staticmethod
+    def delete_instance(project, instance_name):
+        """ Delete a GCP compute instance.
+        """
+        request = compute.instances().delete(
+                                             project = project,
+                                             zone = zone, 
+                                             instance = instance_name)
+        response = request.execute()
+
+    @staticmethod
+    def create_image(project, image_name, source_disk):
         """ Create a GCP instance image.
 
         Images API methods:
@@ -113,7 +139,8 @@ class GimsDeployment(TerraformDeployment):
 
         # Check that instance has stopped running
 
-    def deprecate_image(self, project, image_name):
+    @staticmethod
+    def deprecate_image(project, image_name):
         """ Deprecate an image.
 
         I don't really understand what this means, but 
@@ -121,7 +148,8 @@ class GimsDeployment(TerraformDeployment):
         deleting and then creating new images every time.
         """
 
-    def delete_image(self, project, image_name):
+    @staticmethod
+    def delete_image(project, image_name):
         """ Delete a GCP instance image.
         """
 
@@ -130,32 +158,19 @@ class GimsDeployment(TerraformDeployment):
                                           image = image_name)
         response = request.execute()
 
-    # [START delete_instance]
-    def delete_instance(compute, project, zone, name):
-        return compute.instances().delete(
-                                          project = project,
-                                          zone = zone,
-                                          instance = name).execute()
-    # [END delete_instance]
+# [START delete_instance]
+'''
+def delete_instance(compute, project, zone, name):
+    return compute.instances().delete(
+                                      project = project,
+                                      zone = zone,
+                                      instance = name).execute()
+# [END delete_instance]
+'''
 
-    def delete_instance(self, project, instance_name):
-        """ Delete a GCP compute instance.
-        """
-
-    def run(self, dry_run):
-        """ Run full deployment pipeline.
-        """
-
-        self.destroy()
-        self.apply()
-        self.stop_instance()
-        self.delete_image()
-        self.create_image()
-        self.delete_instance()
-
-def get_deployment_object():
-
-    def __init__():
+#def get_deployment_object():
+#
+#    def __init__():
 
 
 def parse_args(args):
