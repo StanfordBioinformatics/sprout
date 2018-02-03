@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 
 import sys
-import yaml
 import hcl
+import uuid
+import yaml
 import argparse
 
+from time import sleep
+from pprint import pprint
 from subprocess import call
 
 import googleapiclient.discovery
@@ -94,28 +97,45 @@ class GimsDeployment(TerraformDeployment):
 class ComputeOperations():
 
     @staticmethod
-    def stop_instance(project, zone, instance_name):
+    def stop_instance(compute, project, zone, name):
         """ Stop a running GCP instance.
-        """
 
+        Status: Tested.
+        """
+        request_id = str(uuid.uuid4())
         request = compute.instances().stop(
                                            project = project,
                                            zone = zone,
-                                           instance = instance_name)
+                                           instance = name,
+                                           requestId = request_id)
         response = request.execute()
+        wait_for_status(
+                        request, 
+                        response, 
+                        status = 'DONE', 
+                        interval = 10)
 
     @staticmethod
-    def delete_instance(project, instance_name):
+    def delete_instance(compute, project, zone, name):
         """ Delete a GCP compute instance.
+
+        Status: Untested.
         """
+        request_id = str(uuid.uuid4())
         request = compute.instances().delete(
                                              project = project,
                                              zone = zone, 
-                                             instance = instance_name)
+                                             instance = name,
+                                             requestId = request_id)
         response = request.execute()
+        wait_for_status(
+                        request, 
+                        response, 
+                        status = 'DONE', 
+                        interval = 10)
 
     @staticmethod
-    def create_image(project, image_name, source_disk):
+    def create_image(compute, project, image_name, source_disk):
         """ Create a GCP instance image.
 
         Images API methods:
@@ -131,13 +151,20 @@ class ComputeOperations():
                   'rawDisk.source': source_disk
                  }
 
+        # Throw error if source_disk instance is still running
+        ## gcloud api probably throws error anyway
+        request_id = str(uuid.uuid4())
         request = compute.images().insert(
                                           project = project, 
                                           forceCreate = False,
-                                          body = config)
+                                          body = config,
+                                          requestId = request_id)
         response = request.execute()
-
-        # Check that instance has stopped running
+        wait_for_status(
+                        request, 
+                        response, 
+                        status = 'DONE', 
+                        interval = 10)
 
     @staticmethod
     def deprecate_image(project, image_name):
@@ -146,17 +173,22 @@ class ComputeOperations():
         I don't really understand what this means, but 
         I feel like it could be a better alternative to 
         deleting and then creating new images every time.
+
+        Status: Not implemented.
         """
 
     @staticmethod
-    def delete_image(project, image_name):
+    def delete_image(project, image_name, timeout=300):
         """ Delete a GCP instance image.
+
+        Status: Untested.
         """
 
         request = compute.images().delete(
                                           project = project, 
                                           image = image_name)
         response = request.execute()
+        self._wait_for_status(request, response, 'DONE', timeout)
 
 # [START delete_instance]
 '''
@@ -171,6 +203,46 @@ def delete_instance(compute, project, zone, name):
 #def get_deployment_object():
 #
 #    def __init__():
+
+def wait_for_status(request, response, status='DONE', timeout=300, interval=5):
+    """ Wait for Google Cloud API request to complete.
+
+    Possible status are PENDING, RUNNING, or DONE.
+
+    Status: Untested.
+    """
+
+    timeout_cycles = int(timeout)/interval
+
+    valid_statuses = ['PENDING', 'RUNNING', 'DONE']
+    if not status in valid_statuses:
+        raise ValueError(
+                         '{} '.format(status) + 
+                         'is not a valid status. ' + 
+                         '{}'.format(valid_statuses))
+
+    # TODO: Test custom error and fully integrate status/timeout 
+    # variables into function.
+    n = 0
+    while response['status'] != status:
+        n += 1
+        if n >= timeout_cycles:
+            raise TimeoutError("Operation exceeded timeout period. " +
+                               "{}: {}".format(op_kind, op_type))
+        sleep(interval)
+        response = request.execute()
+        op_kind = response['kind']
+        op_type = response['operationType']
+        op_status = response['status']
+        pprint("Waiting for operation. {}: {}; {}".format(
+                                                          op_kind,
+                                                          op_type,
+                                                          op_status))
+    pprint("Operation complete. {}: {}; {}".format(
+                                               op_kind,
+                                               op_type,
+                                               op_status))
+    pprint("=================")
 
 
 def parse_args(args):
