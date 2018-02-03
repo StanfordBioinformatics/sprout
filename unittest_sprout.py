@@ -8,7 +8,7 @@ import unittest
 from time import sleep
 from pprint import pprint
 
-import googleapiclient.discovery
+import googleapiclient.discovery as googleapi
 from googleapiclient.errors import HttpError
 from oauth2client.client import GoogleCredentials
 
@@ -54,22 +54,27 @@ class TestTerraformDeployment(unittest.TestCase):
             
 class TestGimsDeployment(unittest.TestCase):
 
-    def __init__(self):
+    def __init__(self, *args, **kwargs):
+        super(__class__, self).__init__(*args, **kwargs)
+
         self.project = 'gbsc-gcp-project-scgs-dev'
         self.zone = 'us-central1-a'
         self.machine_type = 'n1-standard-1'
         self.name = 'sprout-test-instance'
+        self.image_name = 'sprout-test-image'
 
         self.credentials = GoogleCredentials.get_application_default()
-        self.compute = googleapiclient.discovery.build(
-                                                  'compute', 
-                                                  'v1', 
-                                                  credentials = credentials)
+        self.compute = googleapi.build(
+                                       'compute', 
+                                       'v1', 
+                                       credentials = self.credentials)
 
     def set_up(self, compute, project, zone, machine_type, name):
-        """ Create compute instance in SCGS dev project.
+        """ Create basic compute instance in SCGS dev project.
 
         Run to set up environment to test GIMS deployment functions.
+
+        Dev status: Done.
 
         compute (obj): Google compute API service client
         project (str): Google project ID
@@ -77,11 +82,6 @@ class TestGimsDeployment(unittest.TestCase):
         machine_type (str): Compute instance machine type
         name (str): Compute instance name
         """
-
-        #project = 'gbsc-gcp-project-scgs-dev'
-        #zone = 'us-central1-a'
-        #machine_type = 'n1-standard-1'
-        #name = 'sprout-test-instance'
 
         # Get the latest Debian Jessie image.
         image_response = compute.images().getFromFamily(
@@ -123,13 +123,13 @@ class TestGimsDeployment(unittest.TestCase):
         # Delete instance
         try:
             request_id = str(uuid.uuid4())
-            request = compute.instances().delete(
-                                                 project = project,
-                                                 zone = zone,
-                                                 instance = name,
+            request = self.compute.instances().delete(
+                                                 project = self.project,
+                                                 zone = self.zone,
+                                                 instance = self.name,
                                                  requestId = request_id)
             response = request.execute()
-            wait_for_request(request, response)
+            wait_for_status(request, response, 'DONE', 300)
         except HttpError as err:
                 if err.resp.status in [404]:
                     pprint("Skipping delete: instance does not exist")
@@ -140,43 +140,126 @@ class TestGimsDeployment(unittest.TestCase):
 
         # Create instance
         request_id = str(uuid.uuid4())
-        request = compute.instances().insert(
-                                             project = project,
-                                             zone = zone,
-                                             body = config,
-                                             requestId = request_id)
+        request = self.compute.instances().insert(
+                                                  project = self.project,
+                                                  zone = self.zone,
+                                                  body = config,
+                                                  requestId = request_id)
         response = request.execute()
-        wait_for_request(request, response)
+        wait_for_status(request, response, 'DONE', 300)
 
     def test_stop_instance(self):
+        """ Stop compute instance.
+
+        Dev status: Done.
+        """
+        pprint("Setting up compute instance.")
         self.set_up(
                     self.compute,
                     self.project,
                     self.zone,
                     self.machine_type,
                     self.name)
-        stop_instance(self.project, self.zone, self.name)
+        pprint("Setup complete.")
 
-        # Periodically check whether instance is stopped
-        # After a fixed period, timeout with failure
+        ComputeOperations.stop_instance(
+                                        self.compute, 
+                                        self.project, 
+                                        self.zone, 
+                                        self.name)
+
+        # Check that instance has been stopped
+        request = self.compute.instances().get(
+                                               project = self.project,
+                                               zone = self.zone,
+                                               instance = self.name)
+        response = request.execute()
+        self.assertTrue(response['status'] == 'TERMINATED')
 
     def test_delete_instance(self):
+        """ Delete compute instance.
 
-    def test_create_instance(self):
+        Dev status: Done.
+        """
+        pprint("Setting up compute instance.")
+        self.set_up(
+                    self.compute,
+                    self.project,
+                    self.zone,
+                    self.machine_type,
+                    self.name)
+        pprint("Setup complete.")
 
+        ComputeOperations.delete_instance(
+                                          self.compute, 
+                                          self.project, 
+                                          self.zone, 
+                                          self.name)
+
+        # Get list of comute instances
+        request = self.compute.instances().list(
+                                                project = self.project,
+                                                zone = self.zone)
+        response = request.execute()
+        
+        # Determine whether instance is in list
+        for instance in response['items']:
+            self.assertFalse(instance['name'] == self.name)
+
+    def test_create_image(self):
+        """ Create image from stopped instance.
+
+        Dev status: In-progress.
+        """
+        pprint("Setting up compute instance.")
+        self.set_up(
+                    self.compute,
+                    self.project,
+                    self.zone,
+                    self.machine_type,
+                    self.name)
+        pprint("Setup complete.")
+
+        ComputeOperations.create_instance(
+                                          self.compute, 
+                                          self.project, 
+                                          self.zone, 
+                                          self.name)
+        """ Stop instance and create image from it.
+
+        Dev status: In-progress.
+        """
+        pprint("Setting up compute instance.")
+        self.set_up(
+                    self.compute,
+                    self.project,
+                    self.zone,
+                    self.machine_type,
+                    self.name)
+        pprint("Setup complete.")
+
+        ComputeOperations.stop_instance(
+                                        self.compute, 
+                                        self.project, 
+                                        self.zone, 
+                                        self.name)
+        ComputeOperations.create_image(
+                                       self.compute, 
+                                       self.project, 
+                                       self.image_name, 
+                                       source_disk = self.name)
+        # Test whether you can get image
+        request = service.images().get(
+                                       project = project,
+                                       image = self.image_name)
+        response = request.execute()
+
+    """
     def test_deprecate_image(self):
 
     def test_delete_image(self):
 
-        
-
-        ## Functions to test:
-        # stop_instance
-        # delete_instance
-        # create_image
-        # deprecate_image
-        # delete_image
-
+    """
 
 class ParseArgsTestCase(unittest.TestCase):
 
@@ -184,35 +267,43 @@ class ParseArgsTestCase(unittest.TestCase):
         args = parse_args(['--config', 'sprout_unittest.yaml'])
         self.assertTrue(args.config_file == "sprout_unittest.yaml")
 
-def wait_for_status(request, response, status, int(timeout)):
+
+def wait_for_status(request, response, status, timeout):
     """ Wait for Google Cloud API request to complete.
 
     Possible status are PENDING, RUNNING, or DONE.
     """
 
-    sleep_interval = 2
-    timeout_cycles = timeout/sleep_interval
+    sleep_interval = 5
+    timeout_cycles = int(timeout)/sleep_interval
+
+    valid_statuses = ['PENDING', 'RUNNING', 'DONE']
+    if not status in valid_statuses:
+        raise ValueError(
+                         '{} '.format(status) + 
+                         'is not a valid status. ' + 
+                         '{}'.format(valid_statuses))
 
     # TODO: Test custom error and fully integrate status/timeout 
     # variables into function.
     n = 0
-    while response['status'] != 'DONE':
+    while response['status'] != status:
         if n >= timeout_cycles:
             raise TimeoutError("Operation exceeded timeout period. " +
                                "{}: {}".format(op_kind, op_type))
-            #pprint("Operation timed out.")
-            #break
-        sleep(2)
+        sleep(sleep_interval)
         response = request.execute()
         op_kind = response['kind']
         op_type = response['operationType']
         pprint("Waiting for operation. {}: {}".format(
                                                       op_kind,
                                                       op_type))
+    pprint("=================")
     pprint("Operation complete. {}: {}".format(
                                                op_kind,
                                                op_type))
     pprint("=================")
+
 
 if __name__ == '__main__':
     unittest.main()
