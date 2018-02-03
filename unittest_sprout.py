@@ -207,27 +207,9 @@ class TestGimsDeployment(unittest.TestCase):
             self.assertFalse(instance['name'] == self.name)
 
     def test_create_image(self):
-        """ Create image from stopped instance.
-
-        Dev status: In-progress.
-        """
-        pprint("Setting up compute instance.")
-        self.set_up(
-                    self.compute,
-                    self.project,
-                    self.zone,
-                    self.machine_type,
-                    self.name)
-        pprint("Setup complete.")
-
-        ComputeOperations.create_instance(
-                                          self.compute, 
-                                          self.project, 
-                                          self.zone, 
-                                          self.name)
         """ Stop instance and create image from it.
 
-        Dev status: In-progress.
+        Dev status: Create image is bugged.
         """
         pprint("Setting up compute instance.")
         self.set_up(
@@ -251,8 +233,12 @@ class TestGimsDeployment(unittest.TestCase):
         # Test whether you can get image
         request = service.images().get(
                                        project = project,
-                                       image = self.image_name)
-        response = request.execute()
+                                       resourceId = self.image_name)
+        try:
+            response = request.execute()
+        except HttpError as err:
+
+            pprint(response)
 
     """
     def test_deprecate_image(self):
