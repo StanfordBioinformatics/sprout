@@ -135,7 +135,7 @@ class ComputeOperations():
                         interval = 10)
 
     @staticmethod
-    def create_image(compute, project, image_name, source_disk):
+    def create_image(compute, project, image_name, source_disk, force=False):
         """ Create a GCP instance image.
 
         Images API methods:
@@ -146,9 +146,9 @@ class ComputeOperations():
         Status: Untested
         """
 
-        config = {
-                  'name': image_name,
-                  'rawDisk.source': source_disk
+        config = {                  
+                  "name": image_name,
+                  "sourceDisk": source_disk 
                  }
 
         # Throw error if source_disk instance is still running
@@ -156,7 +156,7 @@ class ComputeOperations():
         request_id = str(uuid.uuid4())
         request = compute.images().insert(
                                           project = project, 
-                                          forceCreate = False,
+                                          forceCreate = force,
                                           body = config,
                                           requestId = request_id)
         response = request.execute()
@@ -178,7 +178,7 @@ class ComputeOperations():
         """
 
     @staticmethod
-    def delete_image(project, image_name, timeout=300):
+    def delete_image(compute, project, image_name, timeout=300):
         """ Delete a GCP instance image.
 
         Status: Untested.
@@ -228,17 +228,17 @@ def wait_for_status(request, response, status='DONE', timeout=300, interval=5):
         n += 1
         if n >= timeout_cycles:
             raise TimeoutError("Operation exceeded timeout period. " +
-                               "{}: {}".format(op_kind, op_type))
+                               "{}: {}.".format(op_kind, op_type))
         sleep(interval)
         response = request.execute()
         op_kind = response['kind']
         op_type = response['operationType']
         op_status = response['status']
-        pprint("Waiting for operation. {}: {}; {}".format(
+        pprint("Waiting for operation. {}: {}; {}.".format(
                                                           op_kind,
                                                           op_type,
                                                           op_status))
-    pprint("Operation complete. {}: {}; {}".format(
+    pprint("Operation complete. {}: {}; {}.".format(
                                                op_kind,
                                                op_type,
                                                op_status))

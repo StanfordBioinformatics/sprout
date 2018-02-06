@@ -88,7 +88,7 @@ class TestGimsDeployment(unittest.TestCase):
             project='debian-cloud', family='debian-8').execute()
         source_disk_image = image_response['selfLink']
         
-        # Create instance
+        # Configure instance settings
         machine_url = "zones/{}/machineTypes/{}".format(
                                                         zone,
                                                         machine_type)
@@ -120,14 +120,30 @@ class TestGimsDeployment(unittest.TestCase):
             }]
         }
 
-        # Delete instance
+        # Delete an existing disk image
+        request_id = str(uuid.uuid4())
+        request = self.compute.images().delete(
+                                               project = self.project,
+                                               image = self.image_name,
+                                               requestId = request_id)
         try:
-            request_id = str(uuid.uuid4())
-            request = self.compute.instances().delete(
-                                                 project = self.project,
-                                                 zone = self.zone,
-                                                 instance = self.name,
-                                                 requestId = request_id)
+            response = request.execute()
+            wait_for_status(request, response, 'DONE', 60)
+        except HttpError as err:
+            if err.resp.status in [404]:
+                pprint("Skipping delete: image does not exist")
+                pass
+            else:
+                raise
+
+        # Delete an existing instance
+        request_id = str(uuid.uuid4())
+        request = self.compute.instances().delete(
+                                             project = self.project,
+                                             zone = self.zone,
+                                             instance = self.name,
+                                             requestId = request_id)
+        try:
             response = request.execute()
             wait_for_status(request, response, 'DONE', 300)
         except HttpError as err:
@@ -136,9 +152,8 @@ class TestGimsDeployment(unittest.TestCase):
                     pass
                 else:
                     raise
-        # Wait for status to be complete
 
-        # Create instance
+        # Create new instance
         request_id = str(uuid.uuid4())
         request = self.compute.instances().insert(
                                                   project = self.project,
@@ -147,6 +162,8 @@ class TestGimsDeployment(unittest.TestCase):
                                                   requestId = request_id)
         response = request.execute()
         wait_for_status(request, response, 'DONE', 300)
+        pprint("Setup complete.")
+        pprint("=================")
 
     def test_stop_instance(self):
         """ Stop compute instance.
@@ -209,8 +226,13 @@ class TestGimsDeployment(unittest.TestCase):
     def test_create_image(self):
         """ Stop instance and create image from it.
 
-        Dev status: Create image is bugged.
+        Dev status: Done.
         """
+        source_disk = "zones/{}/disks/{}".format(
+                                                 self.zone,
+                                                 self.name)
+        force = True
+
         pprint("Setting up compute instance.")
         self.set_up(
                     self.compute,
@@ -218,7 +240,6 @@ class TestGimsDeployment(unittest.TestCase):
                     self.zone,
                     self.machine_type,
                     self.name)
-        pprint("Setup complete.")
 
         ComputeOperations.stop_instance(
                                         self.compute, 
@@ -226,25 +247,34 @@ class TestGimsDeployment(unittest.TestCase):
                                         self.zone, 
                                         self.name)
         ComputeOperations.create_image(
-                                       self.compute, 
-                                       self.project, 
-                                       self.image_name, 
-                                       source_disk = self.name)
+                                       compute = self.compute, 
+                                       project = self.project, 
+                                       image_name = self.image_name, 
+                                       source_disk = source_disk, 
+                                       force = True)
         # Test whether you can get image
-        request = service.images().get(
-                                       project = project,
-                                       resourceId = self.image_name)
+        request = self.compute.images().get(
+                                            project = self.project,
+                                            image = self.image_name)
         try:
             response = request.execute()
         except HttpError as err:
-
             pprint(response)
+
+    def test_delete_image(self):
+        """ Delete disk image.
+
+        Dev status: In-progress.
+        """
+        ComputeOperations.delete_image(
+                                       compute = self.compute,
+                                       project = self.project,
+                                       image_name = self.image_name)
+        # Get list of images
+        # Make sure this one is not in it
 
     """
     def test_deprecate_image(self):
-
-    def test_delete_image(self):
-
     """
 
 class ParseArgsTestCase(unittest.TestCase):
@@ -285,7 +315,7 @@ def wait_for_status(request, response, status, timeout):
                                                       op_kind,
                                                       op_type))
     pprint("=================")
-    pprint("Operation complete. {}: {}".format(
+    pprint("Operation complete. {}: {}.".format(
                                                op_kind,
                                                op_type))
     pprint("=================")
