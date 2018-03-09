@@ -77,11 +77,12 @@ class GimsDeployment(TerraformDeployment):
                 self.vars.update(new_vars)
 
         #! This is not a scalable approach
-        #self.project = self.vars['project']
-        #self.zone = self.vars['zone']
-        #self.load_balancer_vm = self.vars['load_balancer_vm']
-        #self.template_vm = self.vars['template_vm']
-        #self.image_name = self.vars['image_name']
+        # This needs to be fixed
+        self.project = self.vars['project']
+        self.zone = self.vars['zone']
+        self.load_balancer_vm = self.vars['load_balancer_vm']
+        self.template_vm = self.vars['template_vm']
+        self.image_name = self.vars['image_name']
 
     def run(self, dry_run):
         """ Run full deployment pipeline.
@@ -89,25 +90,43 @@ class GimsDeployment(TerraformDeployment):
 
         self.destroy()
         self.apply()
-        self.stop_instance()
-        self.delete_image()
-        self.create_image()
-        self.delete_instance()
 
-class ComputeOperations():
+        compute = ComputeOperator(self.project, self.zone)
 
-    @staticmethod
-    def stop_instance(compute, project, zone, name):
+        compute.stop_instance(self.name)
+        compute.delete_image()
+        compute.create_image()
+        compute.delete_instance()
+
+class ComputeOperator:
+
+    def __init__(self, project, zone):
+        """ 
+
+        Status: Untested.
+        """
+
+        self.project = project
+        self.zone = zone
+        
+        self.credentials = GoogleCredentials.get_application_default()
+        self.compute = googleapi.build(
+                                       'compute', 
+                                       'v1', 
+                                       credentials = self.credentials)
+
+    #@staticmethod
+    def stop_instance(self, name):
         """ Stop a running GCP instance.
 
         Status: Tested.
         """
         request_id = str(uuid.uuid4())
-        request = compute.instances().stop(
-                                           project = project,
-                                           zone = zone,
-                                           instance = name,
-                                           requestId = request_id)
+        request = self.compute.instances().stop(
+                                                project = self.project,
+                                                zone = self.zone,
+                                                instance = name,
+                                                requestId = request_id)
         response = request.execute()
         wait_for_status(
                         request, 
@@ -115,18 +134,18 @@ class ComputeOperations():
                         status = 'DONE', 
                         interval = 10)
 
-    @staticmethod
-    def delete_instance(compute, project, zone, name):
+    #@staticmethod
+    def delete_instance(self, name):
         """ Delete a GCP compute instance.
 
         Status: Untested.
         """
         request_id = str(uuid.uuid4())
-        request = compute.instances().delete(
-                                             project = project,
-                                             zone = zone, 
-                                             instance = name,
-                                             requestId = request_id)
+        request = self.compute.instances().delete(
+                                                  project = self.project,
+                                                  zone = self.zone, 
+                                                  instance = name,
+                                                  requestId = request_id)
         response = request.execute()
         wait_for_status(
                         request, 
@@ -134,8 +153,8 @@ class ComputeOperations():
                         status = 'DONE', 
                         interval = 10)
 
-    @staticmethod
-    def create_image(compute, project, image_name, source_disk, force=False):
+    #@staticmethod
+    def create_image(self, image_name, source_disk, force=False):
         """ Create a GCP instance image.
 
         Images API methods:
@@ -166,19 +185,8 @@ class ComputeOperations():
                         status = 'DONE', 
                         interval = 10)
 
-    @staticmethod
-    def deprecate_image(project, image_name):
-        """ Deprecate an image.
-
-        I don't really understand what this means, but 
-        I feel like it could be a better alternative to 
-        deleting and then creating new images every time.
-
-        Status: Not implemented.
-        """
-
-    @staticmethod
-    def delete_image(compute, project, image_name, timeout=300):
+    #@staticmethod
+    def delete_image(self, image_name, timeout=300):
         """ Delete a GCP instance image.
 
         Status: Untested.
@@ -189,20 +197,6 @@ class ComputeOperations():
                                           image = image_name)
         response = request.execute()
         self._wait_for_status(request, response, 'DONE', timeout)
-
-# [START delete_instance]
-'''
-def delete_instance(compute, project, zone, name):
-    return compute.instances().delete(
-                                      project = project,
-                                      zone = zone,
-                                      instance = name).execute()
-# [END delete_instance]
-'''
-
-#def get_deployment_object():
-#
-#    def __init__():
 
 def wait_for_status(request, response, status='DONE', timeout=300, interval=5):
     """ Wait for Google Cloud API request to complete.

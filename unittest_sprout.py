@@ -14,7 +14,7 @@ from oauth2client.client import GoogleCredentials
 
 from sprout import parse_args
 from sprout import TerraformDeployment
-from sprout import ComputeOperations
+from sprout import ComputeOperator
 
 class TestTerraformDeployment(unittest.TestCase):
 
@@ -52,6 +52,7 @@ class TestTerraformDeployment(unittest.TestCase):
         self.assertTrue(dev_set['var-file'] == 'development.tfvars')
         self.assertTrue(dev_set['state-file'] == 'tfstate-files/development.tfstate')
             
+
 class TestGimsDeployment(unittest.TestCase):
 
     def __init__(self, *args, **kwargs):
@@ -62,12 +63,13 @@ class TestGimsDeployment(unittest.TestCase):
         self.machine_type = 'n1-standard-1'
         self.name = 'sprout-test-instance'
         self.image_name = 'sprout-test-image'
+        self.dummy_image = 'dummy-image'
 
         self.credentials = GoogleCredentials.get_application_default()
-        self.compute = googleapi.build(
-                                       'compute', 
-                                       'v1', 
-                                       credentials = self.credentials)
+        self.api_service = googleapi.build(
+                                           'compute', 
+                                           'v1', 
+                                           credentials = self.credentials)
 
     def set_up(self, compute, project, zone, machine_type, name):
         """ Create basic compute instance in SCGS dev project.
@@ -172,24 +174,23 @@ class TestGimsDeployment(unittest.TestCase):
         """
         pprint("Setting up compute instance.")
         self.set_up(
-                    self.compute,
+                    self.api_service,
                     self.project,
                     self.zone,
                     self.machine_type,
                     self.name)
         pprint("Setup complete.")
 
-        ComputeOperations.stop_instance(
-                                        self.compute, 
-                                        self.project, 
-                                        self.zone, 
-                                        self.name)
+        compute = ComputeOperator(
+                                  self.project, 
+                                  self.zone)
+        compute.stop_instance(self.name)
 
         # Check that instance has been stopped
-        request = self.compute.instances().get(
-                                               project = self.project,
-                                               zone = self.zone,
-                                               instance = self.name)
+        request = self.api_service.instances().get(
+                                                   project = self.project,
+                                                   zone = self.zone,
+                                                   instance = self.name)
         response = request.execute()
         self.assertTrue(response['status'] == 'TERMINATED')
 
@@ -200,23 +201,22 @@ class TestGimsDeployment(unittest.TestCase):
         """
         pprint("Setting up compute instance.")
         self.set_up(
-                    self.compute,
+                    self.api_service,
                     self.project,
                     self.zone,
                     self.machine_type,
                     self.name)
         pprint("Setup complete.")
 
-        ComputeOperations.delete_instance(
-                                          self.compute, 
-                                          self.project, 
-                                          self.zone, 
-                                          self.name)
+        compute = ComputeOperator(
+                                  self.project, 
+                                  self.zone)
+        compute.delete_instance(self.name)
 
         # Get list of comute instances
-        request = self.compute.instances().list(
-                                                project = self.project,
-                                                zone = self.zone)
+        request = self.api_service.instances().list(
+                                                    project = self.project,
+                                                    zone = self.zone)
         response = request.execute()
         
         # Determine whether instance is in list
@@ -235,27 +235,24 @@ class TestGimsDeployment(unittest.TestCase):
 
         pprint("Setting up compute instance.")
         self.set_up(
-                    self.compute,
+                    self.api_service,
                     self.project,
                     self.zone,
                     self.machine_type,
                     self.name)
 
-        ComputeOperations.stop_instance(
-                                        self.compute, 
-                                        self.project, 
-                                        self.zone, 
-                                        self.name)
-        ComputeOperations.create_image(
-                                       compute = self.compute, 
-                                       project = self.project, 
-                                       image_name = self.image_name, 
-                                       source_disk = source_disk, 
-                                       force = True)
+        compute = ComputeOperator(
+                                  self.project, 
+                                  self.zone)
+        compute.stop_instance(self.name)
+        compute.create_image( 
+                             image_name = self.image_name, 
+                             source_disk = source_disk, 
+                             force = True)
         # Test whether you can get image
-        request = self.compute.images().get(
-                                            project = self.project,
-                                            image = self.image_name)
+        request = self.api_service.images().get(
+                                                project = self.project,
+                                                image = self.image_name)
         try:
             response = request.execute()
         except HttpError as err:
@@ -266,16 +263,23 @@ class TestGimsDeployment(unittest.TestCase):
 
         Dev status: In-progress.
         """
-        ComputeOperations.delete_image(
-                                       compute = self.compute,
-                                       project = self.project,
-                                       image_name = self.image_name)
-        # Get list of images
-        # Make sure this one is not in it
+        compute = ComputeOperator(
+                                  self.project, 
+                                  self.zone)
+        compute.delete_image(image_name = self.image_name)
+        
+        # Check that image does not exist
+        request = self.api_service.images().get(
+                                                project = self.project,
+                                                image = self.image_name)
+        try:
+            response = request.execute()
+        except HttpError as err:
+            if err.code == 404:
+                pass
+            else:
+                raise
 
-    """
-    def test_deprecate_image(self):
-    """
 
 class ParseArgsTestCase(unittest.TestCase):
 
