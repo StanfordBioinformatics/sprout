@@ -1,71 +1,106 @@
 #!/usr/bin/env python3
 
+import os
 import sys
 import hcl
 import uuid
 import yaml
 import argparse
+import subprocess
 
 from time import sleep
 from pprint import pprint
-from subprocess import call
 
 import googleapiclient.discovery
 from oauth2client.client import GoogleCredentials
 
-class TerraformDeployment:
+class BaseDeployment:
 
-    def __init__(self, name, state_file, var_files):
+    def __init__(self, root, state_file, var_files):
         """ Manage Terraform deployment process.
 
             name(str): Arbitrary name of this deployment process
             state_file(str): Path to tfstate file
             var_files(list): List of tfvars files
         """
-
-        self.name = name
+        self.root = root
         self.state_file = state_file
         self.var_files = var_files
 
-    def _launch(self, tf_command, dry_run):
+    def _launch(self, tf_commands, dry_run, timeout=3600):
         """ Launch Terraform deployment process.
+
+        args:
+            tf_command (str): Terraform command to run
+            dry_run (bool): If true will just print command
+            timeout (int): Command timeout in seconds
         """
-        arguments = ['terraform', tf_command]
+        arguments = ['terraform']
+        for option in tf_commands:
+            arguments.append(option)
         for var_file in self.var_files:
             arguments.append("-var-file={}".format(var_file))
         arguments.append("-state={}".format(self.state_file))
-        if dry_run:
-            print(arguments)
-        else:
-            call(arguments)
 
-    def destroy(self, dry_run):
+        print("Command: ", arguments, "cwd=", self.root)
+        if dry_run:
+            sys.exit(0)
+
+        deploy_complete = False
+        tries = 3
+        while deploy_complete == False and tries > 0:
+            try:
+                subprocess.run(
+                               arguments,
+                               cwd = self.root,
+                               timeout = timeout,
+                               check = True)
+            except subprocess.TimeoutExpired as err:
+                tries -= 1
+                print("WARNING: deployment operations failed to complete ",
+                      "within timeout period. ")
+                print("Command: ", err.cmd)
+                print("Timeout: ", err.timeout)
+                print("Tries remaining: ", tries)
+            deploy_complete = True
+
+    def destroy(self, dry_run, timeout):
         """ Call Terraform with 'destroy' command.
         """
-        self._launch(tf_command='destroy', dry_run=dry_run)
+        self._launch(
+                    tf_commands = ['destroy', '-force'],
+                    dry_run = dry_run,
+                    timeout = timeout)
 
-    def plan(self, dry_run):
+    def plan(self, dry_run, timeout):
         """ Call Terraform with 'plan' command.
         """
-        self._launch(tf_command='plan', dry_run=dry_run)
+        self._launch(
+                     tf_commands = ['plan'],
+                     dry_run = dry_run,
+                     timeout = timeout)
 
-    def apply(self, dry_run):
+    def apply(self, dry_run, timeout):
         """ Call Terraform with 'apply' command.
         """
-        self._launch(tf_command='apply', dry_run=dry_run)
+        self._launch(
+                     tf_commands = ['apply'],
+                     dry_run = dry_run,
+                     timeout = timeout)
 
-    def run(self, dry_run):
+    def full_run(self, dry_run):
         """ Run full deployment pipeline.
 
         Run destroy and apply.
         """
-        self.destroy()
-        self.apply()
+        self.destroy(dry_run)
+        self.plan(dry_run)
+        self.apply(dry_run)
 
-class GimsDeployment(TerraformDeployment):
+class BalancerDeployment(BaseDeployment):
 
-    def __init__(self, compute, name, state_file, var_files):
-        super().__init__(name, state_file, var_files)
+    def __init__(self, compute, root, state_file, var_files):
+        super().__init__(root, state_file, var_files)
         
         self.compute = compute
         self.vars = {}
@@ -76,13 +111,10 @@ class GimsDeployment(TerraformDeployment):
                 new_vars = hcl.load(fh)
                 self.vars.update(new_vars)
 
-        #! This is not a scalable approach
-        # This needs to be fixed
         self.project = self.vars['project']
         self.zone = self.vars['zone']
-        self.load_balancer_vm = self.vars['load_balancer_vm']
-        self.template_vm = self.vars['template_vm']
-        self.image_name = self.vars['image_name']
+        self.instance_name = self.vars['instance_name']
+        self.image_name = self.vars['template_image']
 
     def run(self, dry_run):
         """ Run full deployment pipeline.
@@ -93,7 +125,7 @@ class GimsDeployment(TerraformDeployment):
 
         compute = ComputeOperator(self.project, self.zone)
 
-        compute.stop_instance(self.name)
+        compute.stop_instance(self.instance_name)
         compute.delete_image()
         compute.create_image()
         compute.delete_instance()
@@ -238,6 +270,23 @@ def wait_for_status(request, response, status='DONE', timeout=300, interval=5):
                                                op_status))
     pprint("=================")
 
+def get_deployment_object(config, compute):
+
+    root = config['root']
+    state_file = os.path.join(root, config['state-file'])
+
+    var_files = []
+    for var_file in config['var-files']:
+        var_path = os.path.join(root, var_file)
+        var_files.append(var_path)
+    # Same operation using a map function (less readable)
+    # var_files = list(map(lambda var_file: os.path.join(config['root'], var_file), config['var-files']))
+
+    if config['load-balancer']:
+        deployment = BalancerDeployment(compute, root, state_file, var_files)
+    else:
+        deployment = BaseDeployment(root, state_file, var_files)
+    return deployment
 
 def parse_args(args):
 
@@ -253,6 +302,11 @@ def parse_args(args):
                         default = False,
                         action = 'store_true',
                         help = 'Do not make system calls when running.')
+
+    if len(args) < 1:
+        parser.print_help(sys.stderr)
+        sys.exit(1)
+
     args = parser.parse_args(args)
     return args 
 
@@ -264,8 +318,6 @@ def main():
     # Create Google compute API service object
     compute = googleapiclient.discovery.build('compute', 'v1')
 
-    deployments = {}
-
     # Parse command-line arguments
     args = parse_args(sys.argv[1:])
     config_file = args.config_file
@@ -275,24 +327,20 @@ def main():
         config = yaml.load(config_fh)
     deployment_sets = config['terraform_sets']
 
-    # TODO: Update to handle different classes (i.e. GIMS)
     # Create deployment objects from config file
-    
+    deployments = []
     for config in deployment_sets:
-        deployment = get_deployment_object(config)
-
-        #deployment = TerraformDeployment(
-        #                                 name = config['name'],
-        #                                 var_file = config['var-file'],
-        #                                 state_file = config['state-file'])
-        deployments[deployment.name] = deployment
+        # Config object is a dictionary with deployment info
+        #print(config, "\n")
+        deployment = get_deployment_object(config, compute)
+        deployments.append(deployment)
+    #print(deployments)
 
     # Make system calls to run Terraform
-    for deployment in deployments.values():
-        #deployment.plan(dry_run)
-        #deployment.destroy(dry_run)
-        #deployment.apply(dry_run)
-        deployment.run(dry_run)
+    for deployment in deployments:
+        deployment.plan(dry_run, timeout=60)
+        deployment.destroy(dry_run, timeout=300)
+        deployment.apply(dry_run, timeout=1200)
 
 if __name__ == "__main__":
     main()
