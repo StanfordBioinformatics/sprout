@@ -1,9 +1,0 @@
-terraform_sets:
-  - name: development
-    type: loom
-    var-file: development.tfvars
-    state-file: tfstate-files/development.tfstate
-  - name: dev-ranjan
-    type: gims
-    var-file: dev-ranjan.tfvars
-    state-file: tfstate-files/dev-ranjan.tfstate
