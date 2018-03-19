@@ -26,5 +26,6 @@
     * Add functions to manage compute instances (i.e stop/delete/create instance): Done
     * Write unit tests for compute operations: In-progress
 * Write tests for GimsDeployment
-* Implement method to launch multiple deployments using default settings
-* Evaluate whether it is worthwhile to add variale functionality
+* Implement method to launch multiple deployments using default settings: Done
+* Evaluate whether it is worthwhile to add variable functionality: No
+* Add load-balancer functionality

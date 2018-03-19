@@ -3,6 +3,7 @@
 import os
 import sys
 import hcl
+import pdb
 import uuid
 import yaml
 import argparse
@@ -13,6 +14,7 @@ from pprint import pprint
 
 import googleapiclient.discovery
 from oauth2client.client import GoogleCredentials
+from googleapiclient.errors import HttpError
 
 class BaseDeployment:
 
@@ -97,6 +99,7 @@ class BaseDeployment:
         self.plan(dry_run)
         self.apply(dry_run)
 
+
 class BalancerDeployment(BaseDeployment):
 
     def __init__(self, compute, root, state_file, var_files):
@@ -115,48 +118,81 @@ class BalancerDeployment(BaseDeployment):
         self.zone = self.vars['zone']
         self.instance_name = self.vars['instance_name']
         self.image_name = self.vars['template_image']
+        self.instance_group = self.vars['instance_group']
 
-    def run(self, dry_run):
+        self.source_disk = "zones/{}/disks/{}".format(
+                                                      self.zone,
+                                                      self.instance_name)
+
+    def full_run(self, compute, dry_run):
         """ Run full deployment pipeline.
         """
 
-        self.destroy()
-        self.apply()
+        self.destroy(dry_run)
+        self.apply(dry_run)
+        if not dry_run:
+            self.load_to_balancer(compute, dry_run)
 
-        compute = ComputeOperator(self.project, self.zone)
+    def load_to_balancer(self, compute, dry_run):
+        """Deploy instance to load balancer.
 
-        compute.stop_instance(self.instance_name)
-        compute.delete_image()
-        compute.create_image()
-        compute.delete_instance()
+        Does not run new Terraform deployment.
+        """
+        #pdb.set_trace()
+        if dry_run:
+            sys.exit(0)
+        #compute = ComputeOperator(self.project, self.zone)
+
+        compute.stop_instance(
+                              name = self.instance_name,
+                              project = self.project,
+                              zone = self.zone)
+        compute.delete_image(
+                             image_name = self.image_name,
+                             project = self.project)
+        compute.create_image(
+                             image_name = self.image_name,
+                             source_disk = self.source_disk,
+                             project = self.project)
+        group_instances = compute.list_group_instances(
+                                                       group_name = self.instance_group,
+                                                       project = self.project,
+                                                       zone = self.zone)
+        for instance_dict in group_instances:
+            instance = instance_dict['instance']
+            instance_name = instance.split('/')[-1]
+            compute.delete_instance(
+                                    name = instance_name,
+                                    project = self.project,
+                                    zone = self.zone)
+
 
 class ComputeOperator:
 
-    def __init__(self, project, zone):
+    def __init__(self):
         """ 
 
         Status: Untested.
         """
-
-        self.project = project
-        self.zone = zone
         
         self.credentials = GoogleCredentials.get_application_default()
-        self.compute = googleapi.build(
-                                       'compute', 
-                                       'v1', 
-                                       credentials = self.credentials)
+        self.client = googleapiclient.discovery.build(
+                                                      'compute',
+                                                      'v1',
+                                                      credentials = self.credentials)
+                                       #'compute',
+                                       #'v1',
+                                       #credentials = self.credentials)
 
-    #@staticmethod
-    def stop_instance(self, name):
+    def stop_instance(self, name, project, zone):
         """ Stop a running GCP instance.
 
         Status: Tested.
         """
         request_id = str(uuid.uuid4())
-        request = self.compute.instances().stop(
-                                                project = self.project,
-                                                zone = self.zone,
+        request = self.client.instances().stop(
+                                                project = project,
+                                                zone = zone,
                                                 instance = name,
                                                 requestId = request_id)
         response = request.execute()
@@ -166,27 +202,54 @@ class ComputeOperator:
                         status = 'DONE', 
                         interval = 10)
 
-    #@staticmethod
-    def delete_instance(self, name):
+    def delete_instance(self, name, project, zone):
         """ Delete a GCP compute instance.
 
         Status: Untested.
         """
+        print("Deleting instance: {}".format(name))
         request_id = str(uuid.uuid4())
-        request = self.compute.instances().delete(
-                                                  project = self.project,
-                                                  zone = self.zone, 
+        request = self.client.instances().delete(
+                                                  project = project,
+                                                  zone = zone,
                                                   instance = name,
                                                   requestId = request_id)
-        response = request.execute()
-        wait_for_status(
-                        request, 
-                        response, 
-                        status = 'DONE', 
-                        interval = 10)
+        try:
+            response = request.execute()
+            wait_for_status(
+                            request,
+                            response,
+                            status = 'DONE',
+                            interval = 10)
+        except HttpError as err:
+            if err.resp.status in [404]:
+                pprint("INFO: Skipping delete; instance does not exist.")
+                pass
+            else:
+                raise
 
-    #@staticmethod
-    def create_image(self, image_name, source_disk, force=False):
+    def list_group_instances(self, group_name, project, zone):
+        """Get a list of instances running in instance group
+
+        args:
+            group_name (str): Name of instance group
+
+        returns:
+            list of dicts with instance metadata
+        """
+
+        #gcloud compute instance-groups managed list-instances gimscluster1 --project=cgstesting-0717
+        #request_id = str(uuid.uuid4())
+        request_body = {"instanceState": "RUNNING"}
+        request = self.client.instanceGroups().listInstances(
+                                                project = project,
+                                                zone = zone,
+                                                instanceGroup = group_name,
+                                                body = request_body)
+        response = request.execute()
+        return response['items']
+
+    def create_image(self, image_name, source_disk, project, force=False):
         """ Create a GCP instance image.
 
         Images API methods:
@@ -196,7 +259,7 @@ class ComputeOperator:
 
         Status: Untested
         """
-
+        pprint("Creating image \"{}\" from source disk \"{}\".".format(image_name, source_disk))
         config = {                  
                   "name": image_name,
                   "sourceDisk": source_disk 
@@ -205,7 +268,7 @@ class ComputeOperator:
         # Throw error if source_disk instance is still running
         ## gcloud api probably throws error anyway
         request_id = str(uuid.uuid4())
-        request = compute.images().insert(
+        request = self.client.images().insert(
                                           project = project, 
                                           forceCreate = force,
                                           body = config,
@@ -217,18 +280,24 @@ class ComputeOperator:
                         status = 'DONE', 
                         interval = 10)
 
-    #@staticmethod
-    def delete_image(self, image_name, timeout=300):
+    def delete_image(self, image_name, project, timeout=300):
         """ Delete a GCP instance image.
 
         Status: Untested.
         """
-
-        request = compute.images().delete(
-                                          project = project, 
-                                          image = image_name)
-        response = request.execute()
-        self._wait_for_status(request, response, 'DONE', timeout)
+        pprint("Deleting image: {}".format(image_name))
+        request = self.client.images().delete(
+                                              project = project,
+                                              image = image_name)
+        try:
+            response = request.execute()
+            wait_for_status(request, response, 'DONE', timeout)
+        except HttpError as err:
+            if err.resp.status in [404]:
+                pprint("INFO: Skipping delete; image does not exist.")
+                pass
+            else:
+                raise
 
 def wait_for_status(request, response, status='DONE', timeout=300, interval=5):
     """ Wait for Google Cloud API request to complete.
@@ -316,7 +385,8 @@ def main():
         raise "Must be using Python 3"
 
     # Create Google compute API service object
-    compute = googleapiclient.discovery.build('compute', 'v1')
+    #compute = googleapiclient.discovery.build('compute', 'v1')
+    compute = ComputeOperator()
 
     # Parse command-line arguments
     args = parse_args(sys.argv[1:])
@@ -338,9 +408,18 @@ def main():
 
     # Make system calls to run Terraform
     for deployment in deployments:
-        deployment.plan(dry_run, timeout=60)
-        deployment.destroy(dry_run, timeout=300)
-        deployment.apply(dry_run, timeout=1200)
+        print(deployment)
+        if isinstance(deployment, BalancerDeployment):
+            print("Launching load balancer deployment")
+            deployment.plan(dry_run, timeout=60)
+            deployment.destroy(dry_run, timeout=300)
+            deployment.apply(dry_run, timeout=1200)
+            #deployment.load_to_balancer(compute, dry_run)
+        elif isinstance(deployment, BaseDeployment):
+            print("Launching base deployment")
+            deployment.plan(dry_run, timeout=60)
+            deployment.destroy(dry_run, timeout=300)
+            deployment.apply(dry_run, timeout=1200)
 
 if __name__ == "__main__":
     main()
