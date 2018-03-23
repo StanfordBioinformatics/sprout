@@ -1,0 +1,19 @@
+terraform_sets:
+  - name: dev-pbr-gims
+    type: gims
+    load-balancer: False
+    root: /opt/cgsdev/terraform-repo/gims
+    var-files:
+      - generic.tfvars
+      - dev-pbr.tfvars
+      - ssh-tfvars/pbilling-ssh.tfvars
+    state-file: tfstate-files/dev-pbr.tfstate
+  - name: dev-pbr-loom
+    type: loom
+    load-balancer: False
+    root: /opt/cgsdev/terraform-repo/loom
+    var-files:
+      - generic.tfvars
+      - dev-pbr.tfvars
+      - ssh-tfvars/pbilling-ssh.tfvars
+    state-file: tfstate-files/dev-pbr.tfstate

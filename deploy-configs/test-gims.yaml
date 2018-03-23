@@ -1,0 +1,10 @@
+terraform_sets:
+  - name: test-gims
+    type: gims
+    load-balancer: True
+    root: /opt/cgsdev/terraform-repo/gims
+    var-files:
+      - generic.tfvars
+      - testing.tfvars
+      - ssh-tfvars/pbilling-ssh.tfvars
+    state-file: tfstate-files/testing.tfstate

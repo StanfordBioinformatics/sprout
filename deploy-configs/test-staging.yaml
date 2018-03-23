@@ -1,0 +1,37 @@
+terraform_sets:
+  - name: testing-gims
+    type: gims
+    load-balancer: True
+    root: /opt/cgsdev/terraform-repo/gims
+    var-files:
+      - generic.tfvars
+      - testing.tfvars
+      - ssh-tfvars/pbilling-ssh.tfvars
+    state-file: tfstate-files/testing.tfstate
+  - name: testing-loom
+    type: loom
+    load-balancer: False
+    root: /opt/cgsdev/terraform-repo/loom
+    var-files:
+      - generic.tfvars
+      - testing.tfvars
+      - ssh-tfvars/pbilling-ssh.tfvars
+    state-file: tfstate-files/testing.tfstate
+  - name: staging-gims
+    type: gims
+    load-balancer: True
+    root: /opt/cgsdev/terraform-repo/gims
+    var-files:
+      - generic.tfvars
+      - staging.tfvars
+      - ssh-tfvars/pbilling-ssh.tfvars
+    state-file: tfstate-files/staging.tfstate
+  - name: staging-loom
+    type: loom
+    load-balancer: False
+    root: /opt/cgsdev/terraform-repo/loom
+    var-files:
+      - generic.tfvars
+      - staging.tfvars
+      - ssh-tfvars/pbilling-ssh.tfvars
+    state-file: tfstate-files/staging.tfstate
