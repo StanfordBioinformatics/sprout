@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python2
 
 import os
 import sys
@@ -13,7 +13,7 @@ from time import sleep
 from pprint import pprint
 
 import googleapiclient.discovery
-from oauth2client.client import GoogleCredentials
+from google.oauth2 import service_account
 from googleapiclient.errors import HttpError
 
 class BaseDeployment:
@@ -52,19 +52,21 @@ class BaseDeployment:
         tries = 3
         while deploy_complete == False and tries > 0:
             try:
-                subprocess.run(
-                               arguments,
-                               cwd = self.root,
-                               timeout = timeout,
-                               check = True)
-            except subprocess.TimeoutExpired as err:
+		home_dir = os.getcwd()
+		os.chdir(self.root)
+                subprocess.check_call(arguments)
+		deploy_complete = True
+		os.chdir(home_dir)
+            except subprocess.CalledProcessError as err:
+                # TODO: change subprocess fnc to check_call() or check_ouput()
+                # TODO: add CalledProcessError handling
                 tries -= 1
                 print("WARNING: deployment operations failed to complete ",
                       "within timeout period. ")
                 print("Command: ", err.cmd)
-                print("Timeout: ", err.timeout)
+                print("Output: ", err.output)
                 print("Tries remaining: ", tries)
-            deploy_complete = True
+                os.chdir(home_dir)
 
     def destroy(self, dry_run, timeout):
         """ Call Terraform with 'destroy' command.
@@ -86,7 +88,7 @@ class BaseDeployment:
         """ Call Terraform with 'apply' command.
         """
         self._launch(
-                     tf_commands = ['apply'],
+                     tf_commands = ['apply', '-auto-approve'],
                      dry_run = dry_run,
                      timeout = timeout)
 
@@ -100,12 +102,11 @@ class BaseDeployment:
         self.apply(dry_run)
 
 
-class BalancerDeployment(BaseDeployment):
+class BalancerDeployment(BaseDeployment, object):
 
-    def __init__(self, compute, root, state_file, var_files):
-        super().__init__(root, state_file, var_files)
+    def __init__(self, root, state_file, var_files):
+        super(BalancerDeployment, self).__init__(root, state_file, var_files)
         
-        self.compute = compute
         self.vars = {}
 
         # Read data from tfvars files into dictionary
@@ -123,45 +124,48 @@ class BalancerDeployment(BaseDeployment):
         self.source_disk = "zones/{}/disks/{}".format(
                                                       self.zone,
                                                       self.instance_name)
+        
+        # Get service key path and create Google API client
+        service_key_name = self.vars['service_account_key']
+	self.service_key = os.path.join(root, service_key_name)
+        self.compute = ComputeOperator(self.service_key)	
 
-    def full_run(self, compute, dry_run):
+    def full_run(self, dry_run):
         """ Run full deployment pipeline.
         """
 
         self.destroy(dry_run)
         self.apply(dry_run)
         if not dry_run:
-            self.load_to_balancer(compute, dry_run)
+            self.load_to_balancer(dry_run)
 
-    def load_to_balancer(self, compute, dry_run):
+    def load_to_balancer(self,  dry_run):
         """Deploy instance to load balancer.
 
         Does not run new Terraform deployment.
         """
-        #pdb.set_trace()
         if dry_run:
             sys.exit(0)
-        #compute = ComputeOperator(self.project, self.zone)
 
-        compute.stop_instance(
+        self.compute.stop_instance(
                               name = self.instance_name,
                               project = self.project,
                               zone = self.zone)
-        compute.delete_image(
+        self.compute.delete_image(
                              image_name = self.image_name,
                              project = self.project)
-        compute.create_image(
+        self.compute.create_image(
                              image_name = self.image_name,
                              source_disk = self.source_disk,
                              project = self.project)
-        group_instances = compute.list_group_instances(
+        group_instances = self.compute.list_group_instances(
                                                        group_name = self.instance_group,
                                                        project = self.project,
                                                        zone = self.zone)
         for instance_dict in group_instances:
             instance = instance_dict['instance']
             instance_name = instance.split('/')[-1]
-            compute.delete_instance(
+            self.compute.delete_instance(
                                     name = instance_name,
                                     project = self.project,
                                     zone = self.zone)
@@ -169,20 +173,19 @@ class BalancerDeployment(BaseDeployment):
 
 class ComputeOperator:
 
-    def __init__(self):
+    def __init__(self, account_key_json):
         """ 
 
         Status: Untested.
         """
         
-        self.credentials = GoogleCredentials.get_application_default()
+        #self.credentials = GoogleCredentials.get_application_default()
+        self.credentials = service_account.Credentials.from_service_account_file(
+									account_key_json)
         self.client = googleapiclient.discovery.build(
                                                       'compute',
                                                       'v1',
                                                       credentials = self.credentials)
-                                       #'compute',
-                                       #'v1',
-                                       #credentials = self.credentials)
 
     def stop_instance(self, name, project, zone):
         """ Stop a running GCP instance.
@@ -238,8 +241,6 @@ class ComputeOperator:
             list of dicts with instance metadata
         """
 
-        #gcloud compute instance-groups managed list-instances gimscluster1 --project=cgstesting-0717
-        #request_id = str(uuid.uuid4())
         request_body = {"instanceState": "RUNNING"}
         request = self.client.instanceGroups().listInstances(
                                                 project = project,
@@ -339,7 +340,7 @@ def wait_for_status(request, response, status='DONE', timeout=300, interval=5):
                                                op_status))
     pprint("=================")
 
-def get_deployment_object(config, compute):
+def get_deployment_object(config):
 
     root = config['root']
     state_file = os.path.join(root, config['state-file'])
@@ -352,7 +353,7 @@ def get_deployment_object(config, compute):
     # var_files = list(map(lambda var_file: os.path.join(config['root'], var_file), config['var-files']))
 
     if config['load-balancer']:
-        deployment = BalancerDeployment(compute, root, state_file, var_files)
+        deployment = BalancerDeployment(root, state_file, var_files)
     else:
         deployment = BaseDeployment(root, state_file, var_files)
     return deployment
@@ -381,12 +382,14 @@ def parse_args(args):
 
 def main():
 
-    if sys.version_info[0] < 3:
-        raise "Must be using Python 3"
+    ## Deployment node uses Python 2 :/
+    #if sys.version_info[0] < 3:
+    #    raise "Must be using Python 3"
 
+    ## Invidual API clients now created per deployment
     # Create Google compute API service object
     #compute = googleapiclient.discovery.build('compute', 'v1')
-    compute = ComputeOperator()
+    #compute = ComputeOperator()
 
     # Parse command-line arguments
     args = parse_args(sys.argv[1:])
@@ -402,7 +405,7 @@ def main():
     for config in deployment_sets:
         # Config object is a dictionary with deployment info
         #print(config, "\n")
-        deployment = get_deployment_object(config, compute)
+        deployment = get_deployment_object(config)
         deployments.append(deployment)
     #print(deployments)
 
@@ -414,7 +417,7 @@ def main():
             deployment.plan(dry_run, timeout=60)
             deployment.destroy(dry_run, timeout=300)
             deployment.apply(dry_run, timeout=1200)
-            #deployment.load_to_balancer(compute, dry_run)
+            deployment.load_to_balancer(dry_run)
         elif isinstance(deployment, BaseDeployment):
             print("Launching base deployment")
             deployment.plan(dry_run, timeout=60)

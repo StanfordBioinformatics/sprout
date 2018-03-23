@@ -1,9 +1,0 @@
-terraform_sets:
-  - name: staging-gims
-    type: gims
-    load-balancer: True
-    root: /Users/s0279879/Documents/GitHub/dev/cgsdev/terraform-repo/gims
-    var-files:
-      - generic.tfvars
-      - staging.tfvars
-    state-file: tfstate-files/staging.tfstate
